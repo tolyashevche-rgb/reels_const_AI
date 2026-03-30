@@ -1,8 +1,24 @@
+# Web
 fastapi
-uvicorn
-python-dotenv
-langchain
+uvicorn[standard]
+pydantic
+
+# LangGraph / LangChain
+langgraph
 langchain-core
-langchain-google-genai
-edge-tts
-twelvelabs
+langchain-anthropic       # Claude Sonnet 4.6 (script_writer) + Haiku 4.5 (всі інші вузли)
+
+# Queue
+redis
+celery
+
+# Database
+psycopg2-binary           # PostgreSQL
+chromadb                  # Vector search (RAG)
+
+# Media (MVP 2+)
+twelvelabs                # Video search
+edge-tts                  # TTS fallback (безкоштовний)
+
+# Utils
+python-dotenv

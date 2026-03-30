@@ -12,10 +12,9 @@
 | Web / Cabinet | Laravel + MySQL |
 | API Gateway | Python FastAPI |
 | Orchestrator | LangGraph |
-| Knowledge Base | PostgreSQL + pgvector (RAG) |
-| LLM (script / review) | Claude 3.5 Haiku |
-| LLM (intent / structure) | GPT-4o-mini |
-| LLM (normalizer) | Gemini 1.5 Flash |
+| Knowledge Base | ChromaDB (RAG, локально) |
+| LLM (creative / script) | Claude Sonnet 4.6 |
+| LLM (simple / structured) | Claude Haiku 4.5 |
 | Video Search | TwelveLabs |
 | TTS (voice-over) | ElevenLabs / OpenAI TTS |
 | Trim / Normalize | FFmpeg |
@@ -25,17 +24,13 @@
 
 ---
 
-## Інфраструктура NETX (3 сервери MVP)
+## Інфраструктура NETX (1 сервер MVP)
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│  NETX Server 1 — App Node (VPS NVMe)                │
+│  NETX Server — All-in-One Node (VPS NVMe)           │
 │  FastAPI · LangGraph · Redis · Celery · Auth        │
-├─────────────────────────────────────────────────────┤
-│  NETX Server 2 — DB Node (VPS SSD)                  │
-│  PostgreSQL · pgvector · backups                    │
-├─────────────────────────────────────────────────────┤
-│  NETX Server 3 — Media Node (VPS dedicated storage) │
+│  PostgreSQL · ChromaDB · backups                    │
 │  FFmpeg workers · raw media · previews · finals     │
 └─────────────────────────────────────────────────────┘
 
@@ -77,7 +72,7 @@ GET    /api/v1/projects/{id}       — дані проєкту
 POST   /api/v1/callback/render     — webhook до Laravel
 ```
 
-*Де*: NETX Server 1
+*Де*: NETX Server
 
 ---
 
@@ -127,7 +122,7 @@ POST   /api/v1/callback/render     — webhook до Laravel
                                                [Human Edit / Re-render]
 ```
 
-*Де*: NETX Server 1
+*Де*: NETX Server
 
 ---
 
@@ -135,42 +130,63 @@ POST   /api/v1/callback/render     — webhook до Laravel
 
 | Вузол | Модель | Причина |
 |---|---|---|
-| `input_normalizer` | Gemini 1.5 Flash | Проста задача, найдешевший ($0.075/1M) |
-| `audience_intent_analysis` | GPT-4o-mini | Класифікація, структурований output ($0.15/1M) |
+| `input_normalizer` | **Claude Haiku 4.5** | Проста задача: очистка і нормалізація тексту |
+| `audience_intent_analysis` | **Claude Haiku 4.5** | Класифікація + structured JSON output |
 | `retrieve_marketing_knowledge` | — | RAG, не LLM виклик |
 | `retrieve_child_dev_knowledge` | — | RAG, не LLM виклик |
-| `script_writer` | **Claude 3.5 Haiku** | Якість письма, довгий structured текст ($0.80/1M in) |
-| `policy_review` | **Claude 3.5 Haiku** | Точне слідування правилам, безпека дитячого контенту |
-| `shot_planner` | GPT-4o-mini | JSON output, проста структура |
-| `asset_selector` | GPT-4o-mini | Вибір з переліку, не творча задача |
+| `script_writer` | **Claude Sonnet 4.6** | Творча задача, якість тексту = цінність продукту |
+| `policy_review` | **Claude Haiku 4.5** | Чітке слідування правилам, низька температура |
+| `shot_planner` | **Claude Haiku 4.5** | Структурований JSON output, логічна задача |
+| `asset_selector` | **Claude Haiku 4.5** | Вибір з переліку, не творча задача |
 
-**Чому Claude 3.5 Haiku для script + review:**
-- Краща якість довгих структурованих текстів ніж GPT-4o-mini
-- Точніше дотримується системних інструкцій (критично для policy_review)
-- Дешевший за Claude Sonnet у 4x, але якість значно вища за mini-моделі
-- Контекст 200K — зручно для RAG chunks
+**Логіка вибору моделі:**
 
-**Орієнтовна вартість 1 запиту при такому міксі: ~$0.02–0.05**
+| Тип задачі | Модель | Коли використовувати |
+|---|---|---|
+| Творчість, якість тексту | Claude Sonnet 4.6 | Коли результат — це продукт (script) |
+| Структура, класифікація, JSON | Claude Haiku 4.5 | Коли задача чітко визначена |
+| Правила, безпека, перевірка | Claude Haiku 4.5 | Low temp + чіткі інструкції важливіше за потужність |
 
-*Резервний варіант*: якщо бюджет дуже обмежений — `script_writer` на GPT-4o-mini (~$0.005/запит, але нижча якість тексту).
+**Чому тільки Claude:**
+- Один API ключ, один SDK (`langchain-anthropic`) — простіший код і білінг
+- Haiku 4.5 чудово слідує інструкціям — критично для `policy_review` і JSON вузлів
+- Sonnet 4.6 для `script_writer` — якість сценарію це ядро продукту, економити тут недоцільно
+- Контекст 200K у всіх моделях — зручно для RAG chunks
+
+**Орієнтовна вартість 1 запиту: ~$0.01–0.03**
+
+*Резервний варіант*: якщо якість script_writer достатня — можна понизити до Haiku 4.5 (~$0.005/запит).
 
 ---
 
-### D — Knowledge Base / RAG
+### D — Knowledge Base / RAG (ChromaDB)
 
 *Що зберігає*
 
-| База | Зміст |
+| Колекція | Зміст |
 |---|---|
-| marketing_knowledge | Книги продажів, hooks, CTA, storytelling, сприйняття соцмереж |
-| child_dev_knowledge | Книги та матеріали фахівців розвитку 0–6 |
-| editorial_guide | Внутрішній tone-of-voice, формати, стилі |
-| safe_claims | Дозволені твердження |
-| banned_claims | Заборонені / ризикові твердження |
+| `marketing_knowledge` | Книги продажів, hooks, CTA, storytelling, сприйняття соцмереж |
+| `child_dev_knowledge` | Книги та матеріали фахівців розвитку 0–6 |
+| `editorial_guide` | Внутрішній tone-of-voice, формати, стилі |
+| `safe_claims` | Дозволені твердження |
+| `banned_claims` | Заборонені / ризикові твердження |
 
-*Технічно*: embeddings + pgvector. Метадані: source, author, trust_level, topic, age_range.
+*Джерела*: папка `files/` — PDF, TXT, DOCX, EPUB книг та матеріалів.
+Скрипт індексації розбиває книги на chunks → генерує embeddings → зберігає в ChromaDB.
 
-*Де*: NETX Server 2 (PostgreSQL + pgvector)
+*Технічно*: LangGraph + ChromaDB (локальна vector DB, $0).
+Метадані кожного chunk: `source`, `author`, `trust_level`, `topic`, `age_range`, `collection`.
+
+*Файлова структура*:
+```
+files/
+  marketing/         ← книги з продажів, SMM, психології
+  child_dev/         ← книги з дитячого розвитку
+  editorial/         ← tone guide, стилі, правила
+chroma_db/           ← локальна база ChromaDB (автоматично)
+```
+
+*Де*: NETX Server (локально, без зовнішніх сервісів)
 
 ---
 
@@ -194,7 +210,7 @@ render_outputs
 edit_actions
 ```
 
-*Де*: NETX Server 2
+*Де*: NETX Server
 
 ---
 
@@ -212,7 +228,7 @@ edit_actions
 /templates/            ← render JSON templates
 ```
 
-*Де*: NETX Server 3 (VPS with dedicated storage)
+*Де*: NETX Server
 
 ---
 
@@ -228,7 +244,7 @@ edit_actions
 
 *Стек*: Redis + Celery
 
-*Де*: NETX Server 1 (Redis), NETX Server 3 (Celery FFmpeg workers)
+*Де*: NETX Server
 
 ---
 
@@ -245,7 +261,7 @@ shot plan → TwelveLabs search API → candidates list
          → asset selector → trim via FFmpeg (Media Node)
 ```
 
-*NETX частина*: оригінали зберігані на Media Node, trim-результати теж.
+*NETX частина*: оригінали зберігані на NETX Server, trim-результати теж.
 
 ---
 
@@ -258,7 +274,7 @@ shot plan → TwelveLabs search API → candidates list
 - subtitle timing prep
 - rough cut concatenation
 
-*Де*: NETX Server 3
+*Де*: NETX Server
 
 ---
 
@@ -291,7 +307,7 @@ shot list + assets + timings + voice_duration
 
 *Сервіс*: ElevenLabs / OpenAI TTS
 
-*NETX частина*: готові audio файли зберігаються у `/voiceovers/` на Media Node.
+*NETX частина*: готові audio файли зберігаються у `/voiceovers/` на NETX Server.
 
 ---
 
@@ -403,9 +419,7 @@ celery -A app.worker worker --loglevel=info
 | TwelveLabs | за індексацію + пошук |
 | TTS (ElevenLabs) | $22–99 |
 | Creatomate | за рендери |
-| NETX Server 1 (App) | per plan |
-| NETX Server 2 (DB) | per plan |
-| NETX Server 3 (Media) | per plan |
+| NETX Server (All-in-One) | per plan |
 
 Головна витрата — LLM + рендери. NETX фіксована оренда.
 
