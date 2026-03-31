@@ -10,6 +10,7 @@ from app.models import (
     RenderRequest, EditRequest, TaskStatus,
     TaskCreatedResponse, TaskResponse, ProjectResponse,
     ScriptResponse, PolicyResponse, PolicyIssueResponse,
+    ShotResponse,
 )
 from app.storage import create_project, create_task, get_task, get_project
 from app.graph import content_graph
@@ -43,22 +44,24 @@ def create_render(req: RenderRequest):
     task.status = TaskStatus.processing
     initial_state = {
         "topic": req.topic,
-        "normalized_topic": req.topic,
         "language": req.language.value,
         "duration_sec": req.duration_sec,
         "style": req.style,
         "user_id": req.user_id,
         "project_id": project.project_id,
-        "intent": {
-            "emotion": req.emotion or "curiosity",
-            "pain_point": req.pain_point or "",
-            "reel_type": req.reel_type or "expert",
-            "age_focus": req.age_focus or "0-6",
-        },
         "marketing_chunks": [],
         "child_dev_chunks": [],
         "errors": [],
     }
+
+    # Intent override — якщо користувач передав оверрайд, пропускаємо audience_intent_analysis
+    if any([req.emotion, req.pain_point, req.reel_type, req.age_focus]):
+        initial_state["intent"] = {
+            "emotion": req.emotion or "curiosity",
+            "pain_point": req.pain_point or "",
+            "reel_type": req.reel_type or "expert",
+            "age_focus": req.age_focus or "0-6",
+        }
 
     try:
         result = content_graph.invoke(initial_state)
@@ -72,6 +75,7 @@ def create_render(req: RenderRequest):
             task.result = {
                 "script": result.get("script"),
                 "policy_result": result.get("policy_result"),
+                "shot_list": result.get("shot_list"),
             }
     except Exception as e:
         task.status = TaskStatus.failed
@@ -94,6 +98,7 @@ def get_render_status(task_id: str):
 
     script_resp = None
     policy_resp = None
+    shots_resp = None
 
     if task.result:
         s = task.result.get("script")
@@ -103,6 +108,9 @@ def get_render_status(task_id: str):
         if p:
             issues = [PolicyIssueResponse(**i) for i in p.get("issues", []) if isinstance(i, dict)]
             policy_resp = PolicyResponse(approved=p.get("approved", False), issues=issues)
+        sh = task.result.get("shot_list")
+        if sh:
+            shots_resp = [ShotResponse(**shot) for shot in sh if isinstance(shot, dict)]
 
     return TaskResponse(
         task_id=task.task_id,
@@ -111,6 +119,7 @@ def get_render_status(task_id: str):
         created_at=task.created_at,
         script=script_resp,
         policy=policy_resp,
+        shots=shots_resp,
     )
 
 

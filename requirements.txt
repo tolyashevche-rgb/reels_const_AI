@@ -16,6 +16,10 @@ celery
 psycopg2-binary           # PostgreSQL
 chromadb                  # Vector search (RAG)
 
+# Indexer (file parsing — optional)
+pypdf                     # PDF reader for book indexing
+python-docx               # DOCX reader for book indexing
+
 # Media (MVP 2+)
 twelvelabs                # Video search
 edge-tts                  # TTS fallback (безкоштовний)

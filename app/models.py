@@ -65,6 +65,14 @@ class PolicyResponse(BaseModel):
     issues: List[PolicyIssueResponse] = []
 
 
+class ShotResponse(BaseModel):
+    order: int
+    description: str
+    duration_sec: float
+    text_overlay: str = ""
+    audio_cue: str = ""
+
+
 class TaskResponse(BaseModel):
     task_id: str
     project_id: str
@@ -72,6 +80,7 @@ class TaskResponse(BaseModel):
     created_at: str
     script: Optional[ScriptResponse] = None
     policy: Optional[PolicyResponse] = None
+    shots: Optional[List[ShotResponse]] = None
 
 
 class TaskCreatedResponse(BaseModel):

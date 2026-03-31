@@ -29,6 +29,14 @@ class PolicyResult(TypedDict):
     revised_script: Optional[ScriptDict]       # виправлений скрипт або null
 
 
+class ShotDict(TypedDict):
+    order: int              # порядковий номер кадру
+    description: str        # опис візуального контенту (для пошуку відео)
+    duration_sec: float     # тривалість кадру в секундах
+    text_overlay: str       # текст поверх відео
+    audio_cue: str          # частина сценарію для voice-over
+
+
 class ReelsState(TypedDict):
     # --- Вхід від користувача ---
     topic: str
@@ -45,7 +53,7 @@ class ReelsState(TypedDict):
     child_dev_chunks: List[str]     # RAG chunks з бази дитячого розвитку
     script: ScriptDict
     policy_result: PolicyResult
-    shot_list: List[dict]
+    shot_list: List[ShotDict]
 
     # --- Системне ---
     errors: Annotated[List[str], operator.add]

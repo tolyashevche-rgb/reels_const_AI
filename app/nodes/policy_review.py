@@ -1,11 +1,11 @@
 import json
-from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import SystemMessage, HumanMessage
 
 from app.state import ReelsState, PolicyResult
 from app.prompts.policy_expert import POLICY_EXPERT_SYSTEM
+from app.llm import get_llm
 
-llm = ChatAnthropic(model="claude-haiku-4-5-20251001", max_tokens=1024, temperature=0.2)
+llm = get_llm("haiku", max_tokens=1024, temperature=0.2)
 
 
 def policy_review(state: ReelsState) -> dict:

@@ -1,12 +1,12 @@
 import json
-from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import SystemMessage, HumanMessage
 
 from app.state import ReelsState, ScriptDict
 from app.prompts.marketing_expert import MARKETING_EXPERT_SYSTEM, REELS_FORMAT_GUIDE
 from app.prompts.child_dev_expert import CHILD_DEV_EXPERT_SYSTEM
+from app.llm import get_llm
 
-llm = ChatAnthropic(model="claude-sonnet-4-6", max_tokens=2048, temperature=0.7)
+llm = get_llm("sonnet")
 
 
 def script_writer(state: ReelsState) -> dict:
