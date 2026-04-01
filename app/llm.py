@@ -10,6 +10,7 @@ LLM factory — повертає реальний ChatAnthropic або MockLLM �
 """
 import os
 import json
+import time
 
 
 def _is_mock() -> bool:
@@ -101,6 +102,38 @@ class MockLLM:
         return "script_writer"
 
 
+# ─── Retry helper ───
+
+def invoke_with_retry(llm, messages, max_attempts: int = 3, base_delay: float = 5.0, fallback_tier: str | None = None):
+    """
+    Викликає llm.invoke з exponential backoff при помилці 529 (overloaded).
+    Якщо fallback_tier вказано — після всіх спроб пробує з дешевшою моделлю.
+    Повертає response або кидає останній виняток.
+    """
+    last_exc = None
+    for attempt in range(max_attempts):
+        try:
+            return llm.invoke(messages)
+        except Exception as e:
+            err_str = str(e)
+            # Retry тільки при overloaded (529) або rate-limit (429)
+            if "529" in err_str or "overloaded" in err_str.lower() or "429" in err_str:
+                delay = base_delay * (2 ** attempt)  # 5, 10, 20s
+                print(f"[llm] API overloaded, retry {attempt+1}/{max_attempts} після {delay:.0f}s...")
+                time.sleep(delay)
+                last_exc = e
+            else:
+                raise
+
+    # Fallback на іншу модель (якщо вказано)
+    if fallback_tier and not _is_mock():
+        print(f"[llm] Fallback на {fallback_tier} після {max_attempts} невдалих спроб")
+        fallback_llm = get_llm(fallback_tier)
+        return fallback_llm.invoke(messages)
+
+    raise last_exc
+
+
 # ─── Factory ───
 
 def get_llm(tier: str = "haiku", **overrides):
@@ -118,6 +151,7 @@ def get_llm(tier: str = "haiku", **overrides):
     defaults = {
         "haiku": {"model": "claude-haiku-4-5-20251001", "max_tokens": 512, "temperature": 0.2},
         "sonnet": {"model": "claude-sonnet-4-6", "max_tokens": 2048, "temperature": 0.7},
+        "opus": {"model": "claude-opus-4-5", "max_tokens": 1500, "temperature": 0.7},
     }
     params = {**defaults.get(tier, defaults["haiku"]), **overrides}
     return ChatAnthropic(**params)

@@ -1,0 +1,96 @@
+"""
+Pexels API клієнт — безкоштовне стокове відео як fallback
+коли TwelveLabs не знаходить кліпів.
+
+API key: https://www.pexels.com/api/ (безкоштовно, 200 req/hour).
+Встановіть змінну середовища PEXELS_API_KEY.
+"""
+import os
+import requests
+
+PEXELS_API_KEY = os.getenv("PEXELS_API_KEY", "")
+PEXELS_SEARCH_URL = "https://api.pexels.com/videos/search"
+
+
+def _get_orientation(format_preset: str) -> str:
+    """Конвертує format preset у Pexels orientation."""
+    if format_preset in ("reels", "story"):
+        return "portrait"
+    elif format_preset == "square":
+        return "square"
+    return "landscape"
+
+
+def _select_best_file(video_files: list, target_height: int) -> dict | None:
+    """Вибирає найкращий файл за якістю (найближчий до target_height)."""
+    best = None
+    best_diff = float("inf")
+    for f in video_files:
+        h = f.get("height", 0)
+        if h == 0:
+            continue
+        diff = abs(h - target_height)
+        if diff < best_diff:
+            best_diff = diff
+            best = f
+    return best
+
+
+def search_videos(query: str, format_preset: str = "reels",
+                  per_page: int = 1) -> list[dict]:
+    """
+    Шукає стокові відео на Pexels.
+    Повертає список: [{"id", "url", "width", "height", "duration"}, ...]
+    """
+    if not PEXELS_API_KEY:
+        return []
+
+    orientation = _get_orientation(format_preset)
+    target_h = 1920 if orientation == "portrait" else 1080
+
+    try:
+        resp = requests.get(
+            PEXELS_SEARCH_URL,
+            headers={"Authorization": PEXELS_API_KEY},
+            params={
+                "query": query[:80],
+                "orientation": orientation,
+                "per_page": per_page,
+                "size": "medium",
+            },
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            return []
+
+        results = []
+        for video in resp.json().get("videos", []):
+            best_file = _select_best_file(
+                video.get("video_files", []), target_h
+            )
+            if best_file:
+                results.append({
+                    "id": video["id"],
+                    "url": best_file["link"],
+                    "width": best_file.get("width", 0),
+                    "height": best_file.get("height", 0),
+                    "duration": video.get("duration", 0),
+                })
+        return results
+
+    except Exception:
+        return []
+
+
+def download_video(url: str, output_path: str, timeout: int = 30) -> bool:
+    """Завантажує відеофайл з Pexels CDN."""
+    try:
+        resp = requests.get(url, stream=True, timeout=timeout)
+        if resp.status_code != 200:
+            return False
+        with open(output_path, "wb") as f:
+            for chunk in resp.iter_content(chunk_size=8192):
+                f.write(chunk)
+        return os.path.exists(output_path) and os.path.getsize(output_path) > 1024
+    except Exception:
+        return False

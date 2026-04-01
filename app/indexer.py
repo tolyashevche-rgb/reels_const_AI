@@ -104,7 +104,9 @@ def index_folder(folder: str, collection_name: str, reset: bool = False):
         return
 
     total_chunks = 0
-    for filename in files:
+    seen_hashes: set[str] = set()  # дедуплікація файлів з однаковим вмістом
+
+    for filename in sorted(files):
         filepath = os.path.join(folder_path, filename)
         if not os.path.isfile(filepath):
             continue
@@ -112,6 +114,14 @@ def index_folder(folder: str, collection_name: str, reset: bool = False):
         text = read_file(filepath)
         if not text:
             continue
+
+        # Пропускаємо дублікати (однаковий вміст = однаковий хеш)
+        import hashlib
+        content_hash = hashlib.md5(text.encode("utf-8", errors="replace")).hexdigest()
+        if content_hash in seen_hashes:
+            print(f"  ~ {filename}: дублікат, пропускаємо")
+            continue
+        seen_hashes.add(content_hash)
 
         chunks = chunk_text(text)
         if not chunks:

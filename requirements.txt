@@ -22,7 +22,8 @@ python-docx               # DOCX reader for book indexing
 
 # Media (MVP 2+)
 twelvelabs                # Video search
-edge-tts                  # TTS fallback (безкоштовний)
+edge-tts                  # TTS (безкоштовний, Microsoft Azure voices)
+mutagen                   # Audio duration detection
 
 # Utils
 python-dotenv

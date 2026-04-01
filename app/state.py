@@ -55,5 +55,18 @@ class ReelsState(TypedDict):
     policy_result: PolicyResult
     shot_list: List[ShotDict]
 
+    # --- TwelveLabs Search + Asset Selection ---
+    search_candidates: List[dict]    # кандидати від TwelveLabs для кожного shot
+    selected_assets: List[dict]      # обрані кліпи (video_id, start, end) для кожного shot
+
+    # --- Media pipeline ---
+    voice_track: str                # шлях до згенерованого аудіо voice-over
+    voice_duration_sec: float       # тривалість voice-over (для перерахунку таймінгів)
+    render_output: str              # шлях до фінального відео файлу
+    preview_url: str                # URL/шлях для preview
+
+    # --- Render config (optional, dict serialized) ---
+    render_config: Optional[dict]   # VideoConfig + TextConfig + AudioConfig
+
     # --- Системне ---
     errors: Annotated[List[str], operator.add]

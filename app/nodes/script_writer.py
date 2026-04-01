@@ -2,79 +2,142 @@ import json
 from langchain_core.messages import SystemMessage, HumanMessage
 
 from app.state import ReelsState, ScriptDict
-from app.prompts.marketing_expert import MARKETING_EXPERT_SYSTEM, REELS_FORMAT_GUIDE
-from app.prompts.child_dev_expert import CHILD_DEV_EXPERT_SYSTEM
-from app.llm import get_llm
+from app.llm import get_llm, invoke_with_retry
 
-llm = get_llm("sonnet")
+llm = get_llm("opus")
+
+
+SYSTEM_PROMPT = """Ти — команда експертів з виробництва Рілзів про ранній розвиток дітей (0–6 років).
+
+У запиті ти отримуєш:
+1. ТЕМУ від користувача
+2. КОНТЕКСТ — релевантні фрагменти з бази знань (книги, статті, методології)
+
+ВАЖЛИВО: Контекст з бази знань має пріоритет над загальними знаннями.
+Якщо контекст містить конкретні факти, методики або авторські підходи —
+використовуй їх як основу, а не як доповнення.
+
+---
+
+Перед написанням скрипту ти послідовно думаєш від імені кожного експерта:
+
+## ЕКСПЕРТ 1 — Спеціаліст з раннього розвитку
+Визнач на основі КОНТЕКСТУ:
+- який аспект розвитку дитини стосується теми
+- які конкретні факти або дослідження є в контексті
+- яка типова помилка батьків згадується або випливає з матеріалів
+
+## ЕКСПЕРТ 2 — Дитячий психолог
+Визнач на основі КОНТЕКСТУ:
+- яка емоція батьків є ключовою (страх, провина, надія, гордість)
+- яке "ага-відкриття" підкріплене матеріалами з бази
+- як зачепити емоцію чесно і без маніпуляцій
+
+## ЕКСПЕРТ 3 — Спеціаліст з утримання уваги
+Визнач:
+- який гачок зупинить скролінг за 3 секунди
+- де додати pattern interrupt в середині
+- який CTA викличе збереження або коментар
+
+## ЕКСПЕРТ 4 — SEO та дистрибуція
+Визнач:
+- які ключові слова вплести природно
+- який перший рядок субтитрів змусить клікнути "більше"
+
+---
+
+Після аналізу всіх експертів — синтезуй єдиний скрипт.
+
+ВИМОГИ:
+- Тон: тепло + авторитетність, без страшилок
+- Кожна фраза = 3-4 секунди мовлення
+- Спирайся на конкретні факти з КОНТЕКСТУ якщо вони є
+- Лише текст для голосу
+- Використовуй hedging: "дослідження свідчать", "може допомогти", "багато дітей"
+- НІКОЛИ: "гарантовано", "обов'язково", "змусить", "зробить розумнішим"
+"""
 
 
 def script_writer(state: ReelsState) -> dict:
     """
     Вузол 4: Генерує hook + body + CTA + text_overlays.
-    Поєднує маркетингову експертизу, формат рілзів та знання про дитячий розвиток.
-    Використовує: Claude 3.5 Haiku
+    Використовує Claude Opus 4.5 з промптом 4 експертів.
+    RAG-контекст з ChromaDB передається в user message.
     """
     duration = state.get("duration_sec", 30)
-    body_end = max(duration - 5, 10)
-
-    format_guide = REELS_FORMAT_GUIDE.format(
-        duration_sec=duration,
-        body_end=body_end,
-        language=state.get("language", "uk"),
-        style=state.get("style", "warm_expert"),
-    )
+    intent = state.get("intent", {})
 
     marketing_context = "\n\n---\n\n".join(state.get("marketing_chunks", []))
     child_dev_context = "\n\n---\n\n".join(state.get("child_dev_chunks", []))
-    intent = state.get("intent", {})
-
-    system_prompt = f"""{MARKETING_EXPERT_SYSTEM}
-
-{CHILD_DEV_EXPERT_SYSTEM}
-
-{format_guide}
-
-You are the intersection of both roles: a marketing expert who only writes content that is scientifically accurate about child development, and a child development expert who knows how to make content stop the scroll."""
 
     knowledge_section = ""
     if marketing_context:
-        knowledge_section += f"\n\n=== MARKETING KNOWLEDGE ===\n{marketing_context}"
+        knowledge_section += f"\n\n=== МАРКЕТИНГ / УВЕРТЮРА / HOOKS ===\n{marketing_context}"
     if child_dev_context:
-        knowledge_section += f"\n\n=== CHILD DEVELOPMENT KNOWLEDGE ===\n{child_dev_context}"
+        knowledge_section += f"\n\n=== ДИТЯЧИЙ РОЗВИТОК ===\n{child_dev_context}"
 
     lang = state.get("language", "uk")
-    lang_map = {"uk": "Ukrainian", "en": "English", "ru": "Russian"}
-    lang_name = lang_map.get(lang, "Ukrainian")
+    lang_map = {"uk": "українською", "en": "англійською", "ru": "російською"}
+    lang_name = lang_map.get(lang, "українською")
 
-    user_message = f"""Write a Reels script for the following brief:
+    user_message = f"""ТЕМА: {state.get("normalized_topic", state.get("topic"))}
+ТРИВАЛІСТЬ: {duration} секунд
+МОВА: скрипт, аналіз і текст у відео мають бути {lang_name}
+ВІКОВИЙ ФОКУС: {intent.get("age_focus", "0-6")} років
+ЕМОЦІЯ: {intent.get("emotion", "curiosity")}
+БІЛЬ: {intent.get("pain_point", "")}
 
-IMPORTANT: Write ALL script text (hook, body, cta, text_overlays) in {lang_name}.
+---
+КОНТЕКСТ З БАЗИ ЗНАНЬ:
+{knowledge_section if knowledge_section else "(контекст не знайдено — використай загальні знання)"}
+---
 
-Topic: {state.get("normalized_topic", state.get("topic"))}
-Emotion/pain to address: {intent.get("emotion", "curiosity")} / {intent.get("pain_point", "")}
-Reel type: {intent.get("reel_type", "expert")}
-Child age focus: {intent.get("age_focus", "0-6")}
-{knowledge_section}
+== КРОК 1: АНАЛІЗ ЧОТИРЬОХ ЕКСПЕРТІВ ==
+Від імені кожного з 4 експертів (зі SYSTEM_PROMPT) напиши конкретно 2-3 речення:
 
-Return ONLY valid JSON with this exact structure (no markdown, no explanation):
+ЕКСПЕРТ 1 — Ранній розвиток:
+(що конкретно дає ця тема для розвитку дитини, які факти є в контексті)
+
+ЕКСПЕРТ 2 — Дитячий психолог:
+(яка емоція батьків тут ключова, яке "ага-відкриття" є в матеріалах)
+
+ЕКСПЕРТ 3 — Утримання уваги:
+(який гачок зупинить скролінг, де pattern interrupt, який CTA)
+
+ЕКСПЕРТ 4 — SEO та дистрибуція:
+(ключові слова, перший рядок субтитрів)
+
+== КРОК 2: СИНТЕЗ (5-й Експерт-продюсер) ==
+Об'єднай висновки всіх чотирьох в єдиний авторський голос.
+Hook має бути конкретним і несподіваним. Body — один сильний інсайт із доказами.
+Text_overlays — це ключові фрази, які батьки захочуть зберегти (не мітки, а сенс).
+СТВОРИ 5 text_overlays: кожен 6-12 слів, повні осмислені фрази, не обрізані.
+Вони будуть відображатись по очереді на екрані, покриваючи всю тривалість відео.
+
+== КРОК 3: JSON ==
+Після аналізу поверни JSON (в кінці відповіді):
 {{
-  "hook": "first 2-3 seconds spoken text",
-  "body": "main content spoken text",
-  "cta": "call to action spoken text",
-  "text_overlays": ["overlay text 1", "overlay text 2", "overlay text 3"],
+  "hook": "гачок, перші 2-3 секунди — конкретний і несподіваний",
+  "body": "основний інсайт з доказами з контексту",
+  "cta": "заклик до дії, останні 3-5 секунд",
+  "text_overlays": ["сильна фраза 1 (6-10 слів)", "сильна фраза 2", "сильна фраза 3", "сильна фраза 4", "сильна фраза 5 (CTA)"],
   "duration_hint_sec": {duration}
 }}"""
 
     try:
-        response = llm.invoke([
-            SystemMessage(content=system_prompt),
+        response = invoke_with_retry(llm, [
+            SystemMessage(content=SYSTEM_PROMPT),
             HumanMessage(content=user_message),
-        ])
+        ], fallback_tier="sonnet")
         content = response.content
-        # Extract JSON even if model wraps it in markdown
         start = content.find("{")
         end = content.rfind("}") + 1
+        # Виводимо аналіз експертів (частина до JSON)
+        expert_analysis = content[:start].strip()
+        if expert_analysis:
+            print("\n[script_writer] Аналіз 4 експертів:")
+            print(expert_analysis[:800] + ("..." if len(expert_analysis) > 800 else ""))
+            print()
         script: ScriptDict = json.loads(content[start:end])
         return {"script": script}
     except Exception as e:

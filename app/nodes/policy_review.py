@@ -3,7 +3,7 @@ from langchain_core.messages import SystemMessage, HumanMessage
 
 from app.state import ReelsState, PolicyResult
 from app.prompts.policy_expert import POLICY_EXPERT_SYSTEM
-from app.llm import get_llm
+from app.llm import get_llm, invoke_with_retry
 
 llm = get_llm("haiku", max_tokens=1024, temperature=0.2)
 
@@ -55,7 +55,7 @@ If only STYLE issues: approved=true, include issues, revised_script=null.
 If IMPORTANT or CRITICAL issues: approved=false, revised_script must fix all issues."""
 
     try:
-        response = llm.invoke([
+        response = invoke_with_retry(llm, [
             SystemMessage(content=POLICY_EXPERT_SYSTEM),
             HumanMessage(content=user_message),
         ])

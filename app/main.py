@@ -3,8 +3,11 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi.staticfiles import StaticFiles
 from typing import Optional
+import os
+import threading
 
 from app.models import (
     RenderRequest, EditRequest, TaskStatus,
@@ -12,10 +15,15 @@ from app.models import (
     ScriptResponse, PolicyResponse, PolicyIssueResponse,
     ShotResponse,
 )
-from app.storage import create_project, create_task, get_task, get_project
+from app.storage import create_project, create_task, get_task, get_project, save_task
 from app.graph import content_graph
 
-app = FastAPI(title="Reels Construction AI", version="0.1.0")
+app = FastAPI(title="Reels Construction AI", version="0.2.0")
+
+# Serve media files (previews, renders)
+_media_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "media")
+os.makedirs(_media_dir, exist_ok=True)
+app.mount("/media", StaticFiles(directory=_media_dir), name="media")
 
 
 # ─── Health ───
@@ -25,47 +33,16 @@ def health():
     return {"status": "ok", "service": "reels-construction-ai"}
 
 
-# ─── POST /api/v1/render — створити задачу ───
+# ─── Background pipeline runner ───
 
-@app.post("/api/v1/render", response_model=TaskCreatedResponse)
-def create_render(req: RenderRequest):
-    """
-    Створює проєкт + задачу, запускає LangGraph pipeline синхронно (MVP).
-    У production замінити на Celery async task.
-    """
-    project = create_project(
-        user_id=req.user_id,
-        topic=req.topic,
-        language=req.language.value,
-    )
-    task = create_task(project, request_data=req.model_dump())
-
-    # --- Build initial state for LangGraph ---
-    task.status = TaskStatus.processing
-    initial_state = {
-        "topic": req.topic,
-        "language": req.language.value,
-        "duration_sec": req.duration_sec,
-        "style": req.style,
-        "user_id": req.user_id,
-        "project_id": project.project_id,
-        "marketing_chunks": [],
-        "child_dev_chunks": [],
-        "errors": [],
-    }
-
-    # Intent override — якщо користувач передав оверрайд, пропускаємо audience_intent_analysis
-    if any([req.emotion, req.pain_point, req.reel_type, req.age_focus]):
-        initial_state["intent"] = {
-            "emotion": req.emotion or "curiosity",
-            "pain_point": req.pain_point or "",
-            "reel_type": req.reel_type or "expert",
-            "age_focus": req.age_focus or "0-6",
-        }
-
+def _run_pipeline(task_id: str, initial_state: dict) -> None:
+    """Запускає LangGraph pipeline у фоновому потоці."""
+    from app.storage import get_task, save_task
+    task = get_task(task_id)
+    if not task:
+        return
     try:
         result = content_graph.invoke(initial_state)
-
         if result.get("errors"):
             task.status = TaskStatus.failed
             task.result = {"errors": result["errors"]}
@@ -76,10 +53,73 @@ def create_render(req: RenderRequest):
                 "script": result.get("script"),
                 "policy_result": result.get("policy_result"),
                 "shot_list": result.get("shot_list"),
+                "search_candidates": result.get("search_candidates"),
+                "selected_assets": result.get("selected_assets"),
+                "voice_track": result.get("voice_track"),
+                "voice_duration_sec": result.get("voice_duration_sec"),
+                "render_output": result.get("render_output"),
+                "preview_url": result.get("preview_url"),
             }
     except Exception as e:
         task.status = TaskStatus.failed
         task.result = {"errors": [str(e)]}
+    save_task(task)
+
+
+# ─── POST /api/v1/render — створити задачу ───
+
+@app.post("/api/v1/render", response_model=TaskCreatedResponse)
+def create_render(req: RenderRequest, background_tasks: BackgroundTasks):
+    """
+    Створює проєкт + задачу, запускає pipeline асинхронно у фоновому потоці.
+    Повертає task_id негайно — клієнт поллінгує GET /api/v1/render/{task_id}.
+    """
+    project = create_project(
+        user_id=req.user_id,
+        topic=req.topic,
+        language=req.language.value,
+    )
+    task = create_task(project, request_data=req.model_dump())
+
+    # Build initial state for LangGraph
+    initial_state = {
+        "topic": req.topic,
+        "language": req.language.value,
+        "duration_sec": req.duration_sec,
+        "style": req.style,
+        "user_id": req.user_id,
+        "project_id": project.project_id,
+        "marketing_chunks": [],
+        "child_dev_chunks": [],
+        "search_candidates": [],
+        "selected_assets": [],
+        "errors": [],
+    }
+
+    # Render config
+    if req.render_config:
+        rc_dict = {}
+        if req.render_config.video:
+            rc_dict["video"] = req.render_config.video.model_dump()
+        if req.render_config.text:
+            rc_dict["text"] = req.render_config.text.model_dump()
+        if req.render_config.audio:
+            rc_dict["audio"] = req.render_config.audio.model_dump()
+        initial_state["render_config"] = rc_dict
+
+    # Intent override
+    if any([req.emotion, req.pain_point, req.reel_type, req.age_focus]):
+        initial_state["intent"] = {
+            "emotion": req.emotion or "curiosity",
+            "pain_point": req.pain_point or "",
+            "reel_type": req.reel_type or "expert",
+            "age_focus": req.age_focus or "0-6",
+        }
+
+    task.status = TaskStatus.processing
+
+    # Запускаємо у фоновому потоці — FastAPI BackgroundTasks
+    background_tasks.add_task(_run_pipeline, task.task_id, initial_state)
 
     return TaskCreatedResponse(
         task_id=task.task_id,
@@ -120,6 +160,8 @@ def get_render_status(task_id: str):
         script=script_resp,
         policy=policy_resp,
         shots=shots_resp,
+        voice_duration_sec=task.result.get("voice_duration_sec") if task.result else None,
+        preview_url=task.result.get("preview_url") if task.result else None,
     )
 
 
@@ -168,6 +210,7 @@ def edit_render(task_id: str, req: EditRequest):
         task.status = TaskStatus.failed
         task.result["errors"] = [str(e)]
 
+    save_task(task)
     return get_render_status(task_id)
 
 

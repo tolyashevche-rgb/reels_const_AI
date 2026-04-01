@@ -2,7 +2,7 @@ import json
 from langchain_core.messages import SystemMessage, HumanMessage
 
 from app.state import ReelsState
-from app.llm import get_llm
+from app.llm import get_llm, invoke_with_retry
 
 llm = get_llm("haiku", max_tokens=512, temperature=0.1)
 
@@ -41,7 +41,7 @@ Raw topic: {topic}
 Return ONLY valid JSON."""
 
     try:
-        response = llm.invoke([
+        response = invoke_with_retry(llm, [
             SystemMessage(content=NORMALIZER_PROMPT),
             HumanMessage(content=user_message),
         ])
