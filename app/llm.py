@@ -154,4 +154,11 @@ def get_llm(tier: str = "haiku", **overrides):
         "opus": {"model": "claude-opus-4-5", "max_tokens": 1500, "temperature": 0.7},
     }
     params = {**defaults.get(tier, defaults["haiku"]), **overrides}
+
+    # Force direct Anthropic API — bypass VS Code proxy that returns SSE streams
+    api_key = os.getenv("ANTHROPIC_API_KEY", "")
+    if api_key:
+        params["anthropic_api_key"] = api_key
+        params["anthropic_api_url"] = "https://api.anthropic.com"
+
     return ChatAnthropic(**params)
